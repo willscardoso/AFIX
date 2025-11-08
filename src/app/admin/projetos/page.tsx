@@ -20,7 +20,7 @@ export default async function ProjetosAdminPage() {
     )
   }
 
-  const { data, error } = await supabaseAdmin.from('projetos').select('id,full_name,email,phone,service,description,location,urgency,budget,status,created_at').order('created_at', { ascending: false }).limit(200)
+  const { data, error } = await supabaseAdmin.from('projetos').select('id,full_name,service,description,location,urgency,budget,status,created_at').order('created_at', { ascending: false }).limit(200)
 
   if (error) {
     return (
@@ -42,7 +42,6 @@ export default async function ProjetosAdminPage() {
             <tr className="bg-gray-100">
               <th className="p-2 text-left">ID</th>
               <th className="p-2 text-left">Nome</th>
-              <th className="p-2 text-left">Email</th>
               <th className="p-2 text-left">Serviço</th>
               <th className="p-2 text-left">Localização</th>
               <th className="p-2 text-left">Urgência</th>
@@ -56,7 +55,7 @@ export default async function ProjetosAdminPage() {
               <tr key={r.id} className="border-t">
                 <td className="p-2 text-sm text-gray-700">{r.id}</td>
                 <td className="p-2 text-sm text-gray-700">{r.full_name}</td>
-                <td className="p-2 text-sm text-gray-700">{r.email}</td>
+                {/* email/phone columns removed from projeto schema */}
                 <td className="p-2 text-sm text-gray-700">{r.service}</td>
                 <td className="p-2 text-sm text-gray-700">{r.location}</td>
                 <td className="p-2 text-sm text-gray-700">{r.urgency}</td>

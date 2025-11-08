@@ -76,6 +76,48 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: 'Failed to create user' }, { status: 500 })
     }
 
+    // If role is cliente (or unspecified so defaulted to cliente), associate existing projetos by email
+    try {
+      // Determine if user is client-like
+      let isCliente = false
+      if (roleName === 'cliente' || roleName === 'client') {
+        isCliente = true
+      } else if (inserted?.role_id != null) {
+        try {
+          const r = await (supabaseAdmin as any).from('roles').select('name').eq('role_id', inserted.role_id).limit(1).maybeSingle()
+          if (!r.error && r.data && r.data.name) {
+            const nm = String(r.data.name).toLowerCase()
+            isCliente = (nm === 'cliente' || nm === 'client')
+          }
+        } catch {}
+      }
+
+      if (isCliente) {
+        // Find projetos with same email
+        const projRes = await (supabaseAdmin as any)
+          .from('projetos')
+          .select('id,email')
+          .ilike('email', email)
+          .limit(1000)
+        if (!projRes.error && Array.isArray(projRes.data) && projRes.data.length) {
+          const records = projRes.data
+            .filter((p: any) => p && p.id)
+            .map((p: any) => ({ projeto_id: String(p.id), user_id: String(inserted.id), role_id: inserted.role_id ?? null }))
+          if (records.length) {
+            const up = await (supabaseAdmin as any)
+              .from('projeto_users')
+              .upsert(records, { onConflict: 'projeto_id,user_id', ignoreDuplicates: true })
+            if (up.error) {
+              // Fallback to insert batch
+              try { await (supabaseAdmin as any).from('projeto_users').insert(records) } catch {}
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // ignore association errors
+    }
+
     return NextResponse.json({ ok: true, user: inserted })
   } catch (err: any) {
     return NextResponse.json({ ok: false, error: err.message ?? String(err) }, { status: 500 })

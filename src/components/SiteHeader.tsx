@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Building2, Globe, Menu, X } from 'lucide-react'
+import { Building2, Globe, Menu, X, Users } from 'lucide-react'
 import { useLanguage } from '@/hooks/useLanguage'
 
 export default function SiteHeader() {
@@ -43,13 +43,18 @@ export default function SiteHeader() {
             {(() => {
               // Role-based nav filtering
               const role = String(currentUser?.role || '').toLowerCase()
-              const allowedForCliente = ['home', 'quote', 'dashboard']
-              const allowedForFranqueado = ['home', 'franchise', 'dashboard', 'chat']
+              const allowedForCliente = ['home', 'quote']
+              // Hide dashboard for franqueado
+              const allowedForFranqueado = ['home', 'franchise', 'chat']
+              const allowedForFranqueador = ['home', 'franchise', 'chat'] // no dashboard for franqueador
+              const allowedForAdmin = ['home', 'dashboard']
               const entries = Object.entries(currentLang.nav).filter(([k]) => {
                 // dashboard must be shown only to logged users
                 if (k === 'dashboard' && !currentUser) return false
+                if (role === 'admin') return allowedForAdmin.includes(k)
                 if (role === 'cliente') return allowedForCliente.includes(k)
-                if (role === 'franqueado' || role === 'franqueador') return allowedForFranqueado.includes(k)
+                if (role === 'franqueado') return allowedForFranqueado.includes(k)
+                if (role === 'franqueador') return allowedForFranqueador.includes(k)
                 return true
               })
 
@@ -71,10 +76,11 @@ export default function SiteHeader() {
 
             {/* Auth controls (login/logout) */}
             {currentUser ? (
-              <div className="flex items-center space-x-3">
-                <div className="text-sm text-gray-700">
-                  <div className="font-medium">{currentUser.full_name || currentUser.email}</div>
-                </div>
+              <div className="flex items-center space-x-2">
+                <button onClick={() => router.push('/account')} className="flex items-center space-x-2 text-gray-700">
+                  <Users className="h-5 w-5 text-gray-600" />
+                  <div className="text-sm font-medium">{currentUser.full_name || currentUser.email}</div>
+                </button>
                 <button onClick={async () => { try { await fetch('/api/auth/logout', { method: 'POST' }) } catch(e){}; setCurrentUser(null); try { window.dispatchEvent(new CustomEvent('afix:logout')) } catch(e){}; router.push('/') }} className="px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:text-blue-600">Logout</button>
               </div>
             ) : (
@@ -101,13 +107,18 @@ export default function SiteHeader() {
           <div className="px-2 pt-2 pb-3 space-y-1">
             {(() => {
               const role = String(currentUser?.role || '').toLowerCase()
-              const allowedForCliente = ['home', 'quote', 'dashboard']
-              const allowedForFranqueado = ['home', 'franchise', 'dashboard', 'chat']
+              const allowedForCliente = ['home', 'quote']
+              // Hide dashboard for franqueado
+              const allowedForFranqueado = ['home', 'franchise', 'chat']
+              const allowedForFranqueador = ['home', 'franchise', 'chat']
+              const allowedForAdmin = ['home', 'dashboard']
               const entries = Object.entries(currentLang.nav).filter(([k]) => {
                 // dashboard must be shown only to logged users
                 if (k === 'dashboard' && !currentUser) return false
+                if (role === 'admin') return allowedForAdmin.includes(k)
                 if (role === 'cliente') return allowedForCliente.includes(k)
-                if (role === 'franqueado' || role === 'franqueador') return allowedForFranqueado.includes(k)
+                if (role === 'franqueado') return allowedForFranqueado.includes(k)
+                if (role === 'franqueador') return allowedForFranqueador.includes(k)
                 return true
               })
 
@@ -130,7 +141,7 @@ export default function SiteHeader() {
             {/* Auth block for mobile: name + logout OR login */}
             {currentUser ? (
               <div className="px-3 py-2 space-y-2">
-                <div className="text-sm font-medium text-gray-700">{currentUser.full_name || currentUser.email}</div>
+                <div className="flex items-center space-x-2 text-sm font-medium text-gray-700"><Users className="h-5 w-5 text-gray-600" />{currentUser.full_name || currentUser.email}</div>
                 <button onClick={async () => { try { await fetch('/api/auth/logout', { method: 'POST' }) } catch(e){}; setMobileOpen(false); setCurrentUser(null); try { window.dispatchEvent(new CustomEvent('afix:logout')) } catch(e){}; router.push('/') }} className="w-full text-left px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:text-blue-600">Logout</button>
               </div>
             ) : (

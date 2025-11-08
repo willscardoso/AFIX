@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation'
 import { useToast } from '@/hooks/use-toast'
 import { useRouter } from 'next/navigation'
@@ -8,14 +8,17 @@ import { useRouter } from 'next/navigation'
 import { Building2, Users, MessageSquare, BarChart3, Settings, Menu, X, Globe, Phone, Mail, MapPin, Star, ArrowRight, CheckCircle, Clock, TrendingUp } from 'lucide-react';
 import { useLanguage } from '@/hooks/useLanguage';
 import { SERVICES, URGENCY_LEVELS, BUDGET_RANGES, COMPANY_INFO } from '@/lib/constants';
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '@/components/ui/collapsible'
 import { ServiceType, QuoteRequest } from '@/lib/types';
 import BancaPage from '@/app/banca/page'
 import QuotePageComponent from '@/components/QuotePage'
 
-export default function Home() {
+function HomeContent() {
   const { language, toggleLanguage } = useLanguage();
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState<'home' | 'quote' | 'franchise' | 'dashboard' | 'chat'>('home');
+  // Avoid initial flicker: wait for auth check before rendering the main content
+  const [authLoaded, setAuthLoaded] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [quoteForm, setQuoteForm] = useState({
     name: '',
@@ -37,26 +40,32 @@ export default function Home() {
   const urgencyRef = useRef<HTMLSelectElement | null>(null)
   const budgetRef = useRef<HTMLSelectElement | null>(null)
 
-  const [currentUser, setCurrentUser] = useState<{ id?: string; email?: string; full_name?: string; role?: string } | null>(null);
+  const [currentUser, setCurrentUser] = useState<{ id?: string; email?: string; full_name?: string; role?: string; phone?: string; created_at?: string } | null>(null);
   const [projetos, setProjetos] = useState<any[]>([])
   const router = useRouter();
 
   useEffect(() => {
     // fetch current user (if any) to show their name on CTAs
     let mounted = true;
-    fetch('/api/auth/me')
-      .then((res) => res.json())
-      .then((data) => {
-        if (!mounted) return;
+    async function loadUser() {
+      try {
+        const res = await fetch('/api/auth/me')
+        const data = await res.json()
+        if (!mounted) return
         if (data?.ok && data.user) {
           // normalize role to lowercase for consistent checks across the app
           const role = data.user.role ? String(data.user.role).toLowerCase() : undefined
-          setCurrentUser({ id: data.user.id, email: data.user.email, full_name: data.user.full_name, role });
+          setCurrentUser({ id: data.user.id, email: data.user.email, full_name: data.user.full_name, role, phone: data.user.phone, created_at: data.user.created_at });
+        } else {
+          setCurrentUser(null)
         }
-      })
-      .catch(() => {
-        /* ignore errors silently */
-      });
+      } catch (e) {
+        // ignore
+      } finally {
+        if (mounted) setAuthLoaded(true)
+      }
+    }
+    loadUser()
     return () => { mounted = false };
   }, []);
 
@@ -82,14 +91,20 @@ export default function Home() {
     }
   }, [searchParams])
 
-  // load projetos for cliente users from the secure server-side endpoint
+  // After auth loads: if user is logged in and we haven't been directed via ?tab,
+  // default to dashboard to avoid flashing the Home first.
+  useEffect(() => {
+    if (!authLoaded) return
+    if (currentUser && activeTab === 'home' && !searchParams?.get('tab')) {
+      setActiveTab('dashboard')
+    }
+  }, [authLoaded, currentUser])
+
+  // load projetos for any authenticated user from the secure server-side endpoint
   useEffect(() => {
     let mounted = true
     async function loadProjetos() {
       if (!currentUser || !currentUser.email) return
-      const role = String(currentUser.role || '').toLowerCase()
-      // allow cliente, franqueado and franqueador to load their projetos
-      if (!['cliente', 'franqueado', 'franqueador'].includes(role)) return
       try {
         const res = await fetch('/api/me/projetos', { method: 'GET', credentials: 'same-origin' })
         const payload = await res.json()
@@ -103,9 +118,25 @@ export default function Home() {
         // ignore
       }
     }
-    loadProjetos()
-    return () => { mounted = false }
-  }, [currentUser])
+    // Defer project loading until auth fully resolved to avoid flashing empty state
+    if (authLoaded) loadProjetos()
+    return () => { mounted = false };
+  }, [currentUser, authLoaded]);
+
+  // listen for global refresh requests (e.g., after submitting a quote)
+  useEffect(() => {
+    const handler = () => {
+      (async () => {
+        try {
+          const res = await fetch('/api/me/projetos', { method: 'GET', credentials: 'same-origin' })
+          const payload = await res.json()
+          if (payload?.ok) setProjetos(payload.projetos || [])
+        } catch (e) {}
+      })()
+    }
+    try { window.addEventListener('afix:refreshProjetos', handler as EventListener) } catch (_) {}
+    return () => { try { window.removeEventListener('afix:refreshProjetos', handler as EventListener) } catch (_) {} }
+  }, [])
 
   const t = {
     pt: {
@@ -113,22 +144,18 @@ export default function Home() {
         home: 'Início',
         quote: 'Pedir Orçamento',
         franchise: 'Franquia',
-        dashboard: 'Dashboard',
-        chat: 'Rede Franquiados'
+        dashboard: 'Projetos',
+        chat: 'Rede Franquia'
       },
       hero: {
         title: 'Transforme o seu espaço com os melhores profissionais',
-        subtitle: 'Conectamos você aos especialistas em remodelação, construção civil, pintura, canalização e betão. Qualidade garantida pelo Grupo AF.',
+        subtitle: 'Conectamos-o com especialistas em remodelação, construção civil, pintura, canalização e betão. Qualidade garantida pelo Grupo AF.',
         cta: 'Pedir Orçamento Grátis',
         stats: {
           clients: 'Clientes Satisfeitos',
           projects: 'Projetos Concluídos',
           professionals: 'Profissionais Certificados'
         }
-      },
-      services: {
-        title: 'Nossos Serviços',
-        subtitle: 'Especialistas em todas as áreas da construção e remodelação'
       },
       quote: {
         title: 'Solicitar Orçamento',
@@ -142,8 +169,12 @@ export default function Home() {
           location: 'Localização',
           urgency: 'Urgência',
           budget: 'Orçamento estimado',
-          submit: 'Enviar Pedido'
-        }
+        },
+        submit: 'Enviar Pedido'
+      },
+      services: {
+        title: 'Os Nossos Serviços',
+        subtitle: 'Especialistas em todas as áreas de construção e remodelação'
       },
       franchise: {
         title: 'Torne-se um Franquiado AFIX',
@@ -176,7 +207,7 @@ export default function Home() {
         home: 'Home',
         quote: 'Request Quote',
         franchise: 'Franchise',
-        dashboard: 'Dashboard',
+        dashboard: 'Projects',
         chat: 'Franchise Network'
       },
       hero: {
@@ -236,7 +267,7 @@ export default function Home() {
     }
   };
 
-  const currentLang = t[language];
+  const currentLang = (t as any)[language] ?? t.pt;
 
   const handleQuoteSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -288,20 +319,28 @@ export default function Home() {
             <span className="ml-2 text-2xl font-bold text-gray-900">AFIX</span>
           </div>
 
-          <div className="hidden md:flex items-center space-x-8">
-            {Object.entries(currentLang.nav).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setActiveTab(key as any)}
-                className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
-                  activeTab === key
-                    ? 'text-blue-600 bg-blue-50'
-                    : 'text-gray-700 hover:text-blue-600'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+      <div className="hidden md:flex items-center space-x-8">
+  {(() => {
+    const r = String(currentUser?.role || '').toLowerCase();
+    // Admin: only show home + dashboard
+    const entries = Object.entries(currentLang.nav as Record<string,string>).filter(([key]) => {
+      if (r === 'admin') return ['home','dashboard'].includes(key);
+      // Hide dashboard for cliente & franqueado (logic original)
+      if ((r === 'cliente' || r === 'franqueado') && key === 'dashboard') return false;
+      return true;
+    });
+    return entries.map(([key,label]) => (
+      <button
+        key={key}
+        onClick={() => setActiveTab(key as any)}
+        className={`px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+          activeTab === key ? 'text-blue-600 bg-blue-50' : 'text-gray-700 hover:text-blue-600'
+        }`}
+      >
+        {label}
+      </button>
+    ))
+  })()}
             <button
               onClick={toggleLanguage}
               className="flex items-center px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:text-blue-600"
@@ -311,20 +350,32 @@ export default function Home() {
             </button>
             {/* Auth controls */}
             {currentUser ? (
-              <button
-                onClick={async () => {
-                  try {
-                    await fetch('/api/auth/logout', { method: 'POST' })
-                  } catch (e) {}
-                  setCurrentUser(null)
-                  setActiveTab('home')
-                  try { window.dispatchEvent(new CustomEvent('afix:logout')) } catch (e) {}
-                  router.push('/')
-                }}
-                className="flex items-center px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:text-blue-600"
-              >
-                Logout
-              </button>
+              <div className="flex items-center space-x-3">
+                <div className="flex items-center space-x-2 text-gray-700">
+                  <Users className="h-5 w-5 text-gray-600" />
+                  <span
+                    className="text-sm font-medium text-gray-700 cursor-pointer hover:text-blue-600"
+                    title={language === 'pt' ? 'Ver conta' : 'View account'}
+                    onClick={() => router.push('/account')}
+                  >
+                    {currentUser.full_name || currentUser.email}
+                  </span>
+                </div>
+                <button
+                  onClick={async () => {
+                    try {
+                      await fetch('/api/auth/logout', { method: 'POST' })
+                    } catch (e) {}
+                    setCurrentUser(null)
+                    setActiveTab('home')
+                    try { window.dispatchEvent(new CustomEvent('afix:logout')) } catch (e) {}
+                    router.push('/')
+                  }}
+                  className="flex items-center px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:text-blue-600"
+                >
+                  Logout
+                </button>
+              </div>
             ) : (
               <button onClick={() => router.push('/login')} className="flex items-center px-3 py-2 rounded-md text-sm font-medium text-gray-700 hover:text-blue-600">Login</button>
             )}
@@ -344,22 +395,25 @@ export default function Home() {
       {mobileMenuOpen && (
         <div className="md:hidden bg-white border-t">
           <div className="px-2 pt-2 pb-3 space-y-1">
-            {Object.entries(currentLang.nav).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => {
-                  setActiveTab(key as any);
-                  setMobileMenuOpen(false);
-                }}
-                className={`block w-full text-left px-3 py-2 rounded-md text-base font-medium ${
-                  activeTab === key
-                    ? 'text-blue-600 bg-blue-50'
-                    : 'text-gray-700 hover:text-blue-600'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+            {(() => {
+              const r = String(currentUser?.role || '').toLowerCase();
+              const entries = Object.entries(currentLang.nav as Record<string,string>).filter(([key]) => {
+                if (r === 'admin') return ['home','dashboard'].includes(key);
+                if ((r === 'cliente' || r === 'franqueado') && key === 'dashboard') return false;
+                return true;
+              });
+              return entries.map(([key,label]) => (
+                <button
+                  key={key}
+                  onClick={() => { setActiveTab(key as any); setMobileMenuOpen(false); }}
+                  className={`block w-full text-left px-3 py-2 rounded-md text-base font-medium ${
+                    activeTab === key ? 'text-blue-600 bg-blue-50' : 'text-gray-700 hover:text-blue-600'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))
+            })()}
             <button
               onClick={toggleLanguage}
               className="flex items-center w-full px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:text-blue-600"
@@ -369,19 +423,31 @@ export default function Home() {
             </button>
             <div className="px-3 py-2">
               {currentUser ? (
-                <button
-                  onClick={async () => {
-                      try {
-                        await fetch('/api/auth/logout', { method: 'POST' })
-                      } catch (e) {}
-                      setCurrentUser(null)
-                      setMobileMenuOpen(false)
-                      setActiveTab('home')
-                      try { window.dispatchEvent(new CustomEvent('afix:logout')) } catch (e) {}
-                      router.push('/')
-                    }}
-                  className="w-full text-left px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:text-blue-600"
-                >Logout</button>
+                <div className="space-y-2">
+                  <div className="flex items-center space-x-2 text-gray-700">
+                    <Users className="h-5 w-5 text-gray-600" />
+                    <span
+                      className="text-sm font-medium cursor-pointer hover:text-blue-600"
+                      title={language === 'pt' ? 'Ver conta' : 'View account'}
+                      onClick={() => { setMobileMenuOpen(false); router.push('/account') }}
+                    >
+                      {currentUser.full_name || currentUser.email}
+                    </span>
+                  </div>
+                  <button
+                    onClick={async () => {
+                        try {
+                          await fetch('/api/auth/logout', { method: 'POST' })
+                        } catch (e) {}
+                        setCurrentUser(null)
+                        setMobileMenuOpen(false)
+                        setActiveTab('home')
+                        try { window.dispatchEvent(new CustomEvent('afix:logout')) } catch (e) {}
+                        router.push('/')
+                      }}
+                    className="w-full text-left px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:text-blue-600"
+                  >Logout</button>
+                </div>
               ) : (
                 <button onClick={() => { setMobileMenuOpen(false); router.push('/login') }} className="w-full text-left px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:text-blue-600">Login</button>
               )}
@@ -506,7 +572,7 @@ export default function Home() {
             </div>
 
             <div className="space-y-4 mb-8">
-              {currentLang.franchise.benefits.map((benefit, index) => (
+              {(currentLang.franchise.benefits as string[]).map((benefit: string, index: number) => (
                 <div key={index} className="flex items-start">
                   <CheckCircle className="h-6 w-6 text-green-500 mr-3 mt-0.5 flex-shrink-0" />
                   <span className="text-gray-700">{benefit}</span>
@@ -589,108 +655,384 @@ export default function Home() {
     </div>
   );
 
-  const DashboardPage = () => (
+  const ProjectsPage = () => (
     <div className="min-h-screen bg-gray-50 py-12">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">
-            {currentLang.dashboard.title}
-          </h1>
-          <p className="text-gray-600">
-            {language === 'pt' 
-              ? 'Visão geral da plataforma AFIX'
-              : 'AFIX platform overview'
+      <div className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8`}> 
+        {/* Single Client Info Card positioned ABOVE the Projects title */}
+        {(() => {
+          const _role = String(currentUser?.role || '').toLowerCase()
+          const isClientLike = ['cliente', 'franqueado', 'franqueador'].includes(_role)
+          if (isClientLike && Array.isArray(projetos) && projetos.length > 0) {
+            const fp: any = projetos[0] || {}
+            return (
+              <div className="mb-6 rounded-xl bg-white p-6 shadow-lg">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+                  <div>
+                    {(() => {
+                      const roleLower = String(currentUser?.role || '').toLowerCase()
+                      const labelPt = roleLower === 'franqueador'
+                        ? 'Franqueador'
+                        : roleLower === 'franqueado'
+                          ? 'Franqueado'
+                          : 'Cliente'
+                      const labelEn = roleLower === 'franqueador'
+                        ? 'Franchisor'
+                        : roleLower === 'franqueado'
+                          ? 'Franchisee'
+                          : 'Client'
+                      return <div className="text-gray-500">{language === 'pt' ? labelPt : labelEn}</div>
+                    })()}
+                    <div className="font-medium text-gray-900">{currentUser?.full_name || fp.full_name || fp.nome || '—'}</div>
+                  </div>
+                  <div>
+                    <div className="text-gray-500">Email</div>
+                    <div className="text-gray-900">{currentUser?.email || fp.email || '—'}</div>
+                  </div>
+                  <div>
+                    <div className="text-gray-500">{language === 'pt' ? 'Telemóvel' : 'Phone'}</div>
+                    <div className="text-gray-900">{currentUser?.phone || fp.phone || fp.telemovel || fp.telefone || '—'}</div>
+                  </div>
+                  <div>
+                    <div className="text-gray-500">{language === 'pt' ? 'Localização' : 'Location'}</div>
+                    <div className="text-gray-900">{fp.location || fp.localizacao || '—'}</div>
+                  </div>
+                  <div>
+                    <div className="text-gray-500">{language === 'pt' ? 'Conta criada' : 'Account created'}</div>
+                    <div className="text-gray-900">{currentUser?.created_at ? new Date(currentUser.created_at).toLocaleString() : (fp.created_at ? new Date(fp.created_at).toLocaleString() : '—')}</div>
+                  </div>
+                </div>
+              </div>
+            )
+          }
+          return null
+        })()}
+
+        <div className="mb-6">
+          {(() => {
+            const roleLower = String(currentUser?.role || '').toLowerCase()
+            if (roleLower === 'franqueado') {
+              return (
+                <>
+                  <h1 className="text-2xl font-bold text-gray-900 mb-1">{language === 'pt' ? 'Serviços' : 'Services'}</h1>
+                  <p className="text-sm text-gray-600">{language === 'pt' ? 'Todos os serviços disponíveis dos projetos' : 'All available services from projects'}</p>
+                </>
+              )
             }
-          </p>
+            return (
+              <>
+                <h1 className="text-2xl font-bold text-gray-900 mb-1">{language === 'pt' ? 'Projetos' : 'Projects'}</h1>
+                <p className="text-sm text-gray-600">{language === 'pt' ? 'Lista de pedidos e projetos' : 'List of requests and projects'}</p>
+              </>
+            )
+          })()}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          <div className="bg-white p-6 rounded-xl shadow-lg">
-            <div className="flex items-center">
-              <Users className="h-8 w-8 text-blue-600" />
-              <div className="ml-4">
-                <p className="text-sm font-medium text-gray-600">
-                  {currentLang.dashboard.stats.clients}
-                </p>
-                <p className="text-2xl font-bold text-gray-900">247</p>
-              </div>
-            </div>
-          </div>
+  {/* Wrapper removido: cada projeto terá agora seu próprio card independente; franqueado continua com cards por serviço */}
+  <div>
+          {(() => {
+            const _role = String(currentUser?.role || '').toLowerCase()
+            const isClientLike = ['cliente', 'franqueado', 'franqueador'].includes(_role)
+            if (isClientLike) {
+              if (projetos.length === 0) {
+                return (
+                  <p className="text-sm text-gray-600">{language === 'pt' ? 'Ainda não tem pedidos.' : 'You have no requests yet.'}</p>
+                )
+              }
+              // Special aggregated services view ONLY for franqueado: show every service as independent card
+              if (_role === 'franqueado') {
+                const allServices = projetos.flatMap((p: any) => (Array.isArray(p.services) ? p.services.map((s: any) => ({ ...s, _project: p })) : []))
+                if (!allServices.length) {
+                  return <p className="text-sm text-gray-600">{language === 'pt' ? 'Sem serviços disponíveis.' : 'No services available.'}</p>
+                }
+                // sort newest first by service created_at if available else project created_at
+                allServices.sort((a: any, b: any) => new Date(b.created_at || b._project?.created_at || 0).getTime() - new Date(a.created_at || a._project?.created_at || 0).getTime())
+                return (
+                  <div className="space-y-4">
+                    {allServices.map((s: any, i: number) => {
+                      const serviceLabel = (SERVICES as any)[s.service]?.name || s.service || `Serviço ${i + 1}`
+                      const budgetLabel = BUDGET_RANGES.find((b: any) => b.value === s.budget)?.label || ''
+                      const urgencyLabel = (URGENCY_LEVELS as any)[s.urgency]?.name || ''
+                      const statusLabel = s.status === 'respondido' ? (language === 'pt' ? 'Respondido' : 'Answered') : s.status === 'pendente' ? (language === 'pt' ? 'Pendente' : 'Pending') : (s.status || '')
+                      const proj = s._project || {}
+                      return (
+                        <div key={s.id || i} className="w-full border border-gray-200 rounded-md bg-white p-4 shadow-sm">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                              <div className="text-sm font-semibold text-gray-800">{serviceLabel}</div>
+                              <div className="text-xs text-gray-500">{new Date(proj.created_at).toLocaleDateString()}</div>
+                            </div>
+                            <div className="flex items-center gap-2 text-xs text-gray-600">
+                              {budgetLabel && <span className="px-2 py-0.5 rounded bg-gray-100">{budgetLabel}</span>}
+                              {urgencyLabel && <span className="px-2 py-0.5 rounded bg-gray-100">{urgencyLabel}</span>}
+                              {s.status && <span className={`px-2 py-0.5 rounded ${s.status === 'respondido' ? 'bg-blue-100 text-blue-800' : s.status === 'pendente' ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-800'}`}>{statusLabel}</span>}
+                            </div>
+                          </div>
+                          {s.description ? <div className="mt-2 text-sm text-gray-700 whitespace-pre-line">{s.description}</div> : null}
+                          <div className="mt-2 flex flex-wrap gap-3 text-xs text-gray-500">
+                            {s.created_at && <span>{language === 'pt' ? 'Criado' : 'Created'}: {new Date(s.created_at).toLocaleString()}</span>}
+                            {s.responsavel_tecnico && <span>{language === 'pt' ? 'Franqueado Responsável' : 'Responsible Franchisee'}: {s.responsavel_tecnico}</span>}
+                          </div>
+                          {/* Angariar / Desistir (service-level) */}
+                          <div className="mt-3 flex gap-2">
+                            {(() => {
+                              const myId = (currentUser?.full_name || currentUser?.email || '').trim()
+                              const isMine = Boolean(s.responsavel_tecnico) && String(s.responsavel_tecnico).trim() === myId
+                              if (s.status !== 'respondido') {
+                                return (
+                                  <button
+                                    onClick={async () => {
+                                      try {
+                                        const res = await fetch(`/api/servicos/${s.id}/angariar`, { method: 'POST' })
+                                        const data = await res.json()
+                                        if (data.ok) {
+                                          setProjetos(prev => prev.map(pr => pr.id === proj.id ? { ...pr, services: (pr.services || []).map((sv: any) => (sv.id === s.id ? { ...sv, status: 'respondido', responsavel_tecnico: (currentUser?.full_name || currentUser?.email || '') } : sv)) } : pr))
+                                        } else {
+                                          alert(data.error || 'Erro ao angariar serviço')
+                                        }
+                                      } catch (e:any) {
+                                        alert('Erro ao angariar serviço')
+                                      }
+                                    }}
+                                    className="inline-flex items-center px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700"
+                                  >
+                                    {language === 'pt' ? 'Angariar' : 'Claim'}
+                                  </button>
+                                )
+                              }
+                              // status == respondido: só o franqueado que angariou pode desistir; os outros não veem botões
+                              if (isMine) {
+                                return (
+                                  <button
+                                    onClick={async () => {
+                                      try {
+                                        const res = await fetch(`/api/servicos/${s.id}/desistir`, { method: 'POST' })
+                                        const data = await res.json()
+                                        if (data.ok) {
+                                          setProjetos(prev => prev.map(pr => pr.id === proj.id ? { ...pr, services: (pr.services || []).map((sv: any) => (sv.id === s.id ? { ...sv, status: 'pendente', responsavel_tecnico: null } : sv)) } : pr))
+                                        } else {
+                                          alert(data.error || 'Erro ao desistir do serviço')
+                                        }
+                                      } catch (e:any) {
+                                        alert('Erro ao desistir do serviço')
+                                      }
+                                    }}
+                                    className="inline-flex items-center px-3 py-1.5 bg-red-600 text-white text-sm rounded-md hover:bg-red-700"
+                                  >
+                                    {language === 'pt' ? 'Desistir' : 'Unclaim'}
+                                  </button>
+                                )
+                              }
+                              return null
+                            })()}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              }
 
-          <div className="bg-white p-6 rounded-xl shadow-lg">
-            <div className="flex items-center">
-              <Clock className="h-8 w-8 text-yellow-600" />
-              <div className="ml-4">
-                <p className="text-sm font-medium text-gray-600">
-                  {currentLang.dashboard.stats.quotes}
-                </p>
-                <p className="text-2xl font-bold text-gray-900">18</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-xl shadow-lg">
-            <div className="flex items-center">
-              <CheckCircle className="h-8 w-8 text-green-600" />
-              <div className="ml-4">
-                <p className="text-sm font-medium text-gray-600">
-                  {currentLang.dashboard.stats.completed}
-                </p>
-                <p className="text-2xl font-bold text-gray-900">156</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white p-6 rounded-xl shadow-lg">
-            <div className="flex items-center">
-              <TrendingUp className="h-8 w-8 text-purple-600" />
-              <div className="ml-4">
-                <p className="text-sm font-medium text-gray-600">
-                  {currentLang.dashboard.stats.growth}
-                </p>
-                <p className="text-2xl font-bold text-gray-900">+23%</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          <div className="bg-white rounded-xl shadow-lg p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">
-              {language === 'pt' ? 'Pedidos Recentes' : 'Recent Requests'}
-            </h3>
-            {['cliente', 'franqueado', 'franqueador'].includes(String(currentUser?.role || '').toLowerCase()) ? (
-              projetos.length === 0 ? (
-                <p className="text-sm text-gray-600">{language === 'pt' ? 'Ainda não tem pedidos.' : 'You have no requests yet.'}</p>
-              ) : (
-                <div className="grid grid-cols-1 gap-4">
+              return (
+                <div className="grid grid-cols-1 gap-6">
                   {projetos.map((p) => (
-                    <div key={p.id} className="border rounded-lg p-4 bg-gray-50">
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <p className="font-semibold text-gray-900">{p.full_name || p.email}</p>
-                          <p className="text-sm text-gray-600">{p.service} • {p.location}</p>
-                        </div>
-                        <div className="text-right">
-                          <span className={`px-2 py-1 rounded-full text-xs font-medium ${p.status === 'pendente' ? 'bg-yellow-100 text-yellow-800' : p.status === 'em_analise' ? 'bg-blue-100 text-blue-800' : p.status === 'finalizado' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
-                            {p.status === 'pendente' ? (language === 'pt' ? 'Pendente' : 'Pending') : p.status === 'em_analise' ? (language === 'pt' ? 'Em Análise' : 'In Analysis') : p.status === 'finalizado' ? (language === 'pt' ? 'Finalizado' : 'Finished') : (language === 'pt' ? 'Respondido' : 'Responded')}
-                          </span>
-                          <div className="text-xs text-gray-500 mt-1">{new Date(p.created_at).toLocaleString()}</div>
-                        </div>
-                      </div>
-                      <div className="mt-3 text-sm text-gray-700">{p.description}</div>
-                      <div className="mt-3 flex items-center justify-between text-sm text-gray-600">
-                        {/* clients should not see contact info here; admins should */}
-                        <div>
-                          {String(currentUser?.role || '').toLowerCase() === 'admin' ? <span>{p.email} • {p.phone}</span> : null}
-                        </div>
-                        <div className="font-medium">{p.budget ? `€ ${p.budget}` : ''}</div>
-                      </div>
+                    <div key={p.id} className="rounded-xl bg-white shadow-lg p-6 relative">
+                      {(() => {
+                        const roleLower = String(currentUser?.role || '').toLowerCase()
+                        // franqueado now sees full card (details + services) like others
+
+                        return (
+                          <>
+                            <div className="flex justify-between items-start">
+                              <div className="pr-4">
+                                {p.nome_projeto ? (
+                                  <p className="font-semibold text-gray-900 text-sm mb-1">{p.nome_projeto}</p>
+                                ) : null}
+                                <p className="font-medium text-gray-700 text-xs">{p.full_name || 'Cliente'}</p>
+                              </div>
+                              <div className="text-right flex flex-col items-end gap-1">
+                                <div className="flex items-center gap-2">
+                                  {(() => {
+                                    const budgetLabel = BUDGET_RANGES.find((b:any) => b.value === p.budget)?.label || ''
+                                    return budgetLabel ? (
+                                      <span className="px-2 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700" title={language==='pt'? 'Orçamento':'Budget'}>{budgetLabel}</span>
+                                    ) : null
+                                  })()}
+                                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${p.status === 'pendente' ? 'bg-yellow-100 text-yellow-800' : p.status === 'em_analise' ? 'bg-blue-100 text-blue-800' : p.status === 'finalizado' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                                    {p.status === 'pendente' ? (language === 'pt' ? 'Pendente' : 'Pending') : p.status === 'em_analise' ? (language === 'pt' ? 'Em Análise' : 'In Analysis') : p.status === 'finalizado' ? (language === 'pt' ? 'Finalizado' : 'Finished') : (language === 'pt' ? 'Respondido' : 'Responded')}
+                                  </span>
+                                </div>
+                                <div className="text-[10px] text-gray-500">{new Date(p.created_at).toLocaleString()}</div>
+                              </div>
+                            </div>
+                            <div className="mt-2 text-sm text-gray-600">
+                              {p.location ? <div><strong>Morada:</strong> {p.location}</div> : null}
+                              {p.localizacao ? <div><strong>Localização:</strong> {p.localizacao}</div> : null}
+                              {p.responsavel_tecnico ? <div><strong>Responsável Técnico:</strong> {p.responsavel_tecnico}</div> : null}
+                              {p.data_inicio_prevista ? <div><strong>Início previsto:</strong> {new Intl.DateTimeFormat(language === 'pt' ? 'pt-PT' : 'en-US', { day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(p.data_inicio_prevista))}</div> : null}
+                              {p.prazo_execucao_meses || p.prazo_execucao_mes ? <div><strong>Prazo (meses):</strong> {p.prazo_execucao_meses || p.prazo_execucao_mes}</div> : null}
+                              {p.urgency ? <div><strong>Urgência:</strong> {(URGENCY_LEVELS as any)[p.urgency]?.name || p.urgency}</div> : null}
+                            </div>
+                            <div className="mt-3 text-sm text-gray-700">{p.description}</div>
+                            {Array.isArray(p.services) && p.services.length ? (
+                              <div className="mt-3 w-full space-y-2">
+                                {p.services.map((s: any, si: number) => {
+                                  const serviceLabel = (SERVICES as any)[s.service]?.name || s.service || `Serviço ${si + 1}`
+                                  const budgetLabel = BUDGET_RANGES.find((b: any) => b.value === s.budget)?.label || ''
+                                  const urgencyLabel = (URGENCY_LEVELS as any)[s.urgency]?.name || ''
+                                  const statusLabel = s.status === 'respondido' ? (language === 'pt' ? 'Respondido' : 'Answered') : s.status === 'pendente' ? (language === 'pt' ? 'Pendente' : 'Pending') : (s.status || '')
+                                  const roleLower = String(currentUser?.role || '').toLowerCase()
+                                  return (
+                                    <div key={si} className="w-full border border-gray-200 rounded-md bg-white p-3 shadow-sm">
+                                      <Collapsible defaultOpen={false}>
+                                        <div className="w-full">
+                                          <CollapsibleTrigger className="w-full text-left flex items-center justify-between px-3 py-2">
+                                            <div className="flex items-center space-x-3">
+                                              <div className="text-sm font-medium text-gray-800">{serviceLabel}</div>
+                                              <div className="text-xs text-gray-500">{budgetLabel ? `${budgetLabel}` : ''}{urgencyLabel ? ` • ${urgencyLabel}` : ''}</div>
+                                              {s.status && (
+                                                <span className={`px-2 py-0.5 rounded text-xs ${s.status === 'respondido' ? 'bg-blue-100 text-blue-800' : s.status === 'pendente' ? 'bg-yellow-100 text-yellow-800' : 'bg-gray-100 text-gray-800'}`}>{statusLabel}</span>
+                                              )}
+                                            </div>
+                                            <div className="text-sm text-gray-500">{language === 'pt' ? 'Detalhes' : 'Details'}</div>
+                                          </CollapsibleTrigger>
+                                        </div>
+                                        <CollapsibleContent className="p-3 text-sm text-gray-700">
+                                          <div className="mb-2">{s.description}</div>
+                                          <div className="text-xs text-gray-500">{language === 'pt' ? 'Urgência' : 'Urgency'}: {urgencyLabel || '—'}</div>
+                                          <div className="text-xs text-gray-500">{language === 'pt' ? 'Orçamento' : 'Budget'}: {budgetLabel || '—'}</div>
+                                          {s.responsavel_tecnico && (
+                                            <div className="text-xs text-gray-500">{language === 'pt' ? 'Franqueado Responsável' : 'Responsible Franchisee'}: {s.responsavel_tecnico}</div>
+                                          )}
+                                          {roleLower === 'franqueado' && (
+                                            <div className="mt-3 flex gap-2">
+                                              {(() => {
+                                                const myId = (currentUser?.full_name || currentUser?.email || '').trim()
+                                                const isMine = Boolean(s.responsavel_tecnico) && String(s.responsavel_tecnico).trim() === myId
+                                                if (s.status !== 'respondido') {
+                                                  return (
+                                                    <button
+                                                      onClick={async () => {
+                                                        try {
+                                                          const res = await fetch(`/api/servicos/${s.id}/angariar`, { method: 'POST' })
+                                                          const data = await res.json()
+                                                          if (data.ok) {
+                                                            setProjetos(prev => prev.map(pr => pr.id === p.id ? { ...pr, services: (pr.services || []).map((sv: any) => (sv.id === s.id ? { ...sv, status: 'respondido', responsavel_tecnico: (currentUser?.full_name || currentUser?.email || '') } : sv)) } : pr))
+                                                          } else {
+                                                            alert(data.error || 'Erro ao angariar serviço')
+                                                          }
+                                                        } catch (e:any) {
+                                                          alert('Erro ao angariar serviço')
+                                                        }
+                                                      }}
+                                                      className="inline-flex items-center px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700"
+                                                    >
+                                                      {language === 'pt' ? 'Angariar' : 'Claim'}
+                                                    </button>
+                                                  )
+                                                }
+                                                if (isMine) {
+                                                  return (
+                                                    <button
+                                                      onClick={async () => {
+                                                        try {
+                                                          const res = await fetch(`/api/servicos/${s.id}/desistir`, { method: 'POST' })
+                                                          const data = await res.json()
+                                                          if (data.ok) {
+                                                            setProjetos(prev => prev.map(pr => pr.id === p.id ? { ...pr, services: (pr.services || []).map((sv: any) => (sv.id === s.id ? { ...sv, status: 'pendente', responsavel_tecnico: null } : sv)) } : pr))
+                                                          } else {
+                                                            alert(data.error || 'Erro ao desistir do serviço')
+                                                          }
+                                                        } catch (e:any) {
+                                                          alert('Erro ao desistir do serviço')
+                                                        }
+                                                      }}
+                                                      className="inline-flex items-center px-3 py-1.5 bg-red-600 text-white text-sm rounded-md hover:bg-red-700"
+                                                    >
+                                                      {language === 'pt' ? 'Desistir' : 'Unclaim'}
+                                                    </button>
+                                                  )
+                                                }
+                                                return null
+                                              })()}
+                                            </div>
+                                          )}
+                                        </CollapsibleContent>
+                                      </Collapsible>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                            ) : null}
+                            {(!p.responsavel_tecnico && currentUser && ['franqueador'].includes(String(currentUser.role||'').toLowerCase())) ? (
+                              <div className="mt-4">
+                                <button
+                                  onClick={async () => {
+                                    try {
+                                      const res = await fetch(`/api/projetos/${p.id}/angariar`, { method: 'POST' })
+                                      const data = await res.json()
+                                      if (data.ok) {
+                                        setProjetos(prev => prev.map(pr => pr.id === p.id ? { ...pr, responsavel_tecnico: data.projeto?.responsavel_tecnico || (currentUser?.full_name || currentUser?.email || 'Eu'), status: (pr.status === 'pendente' ? 'respondido' : pr.status) } : pr))
+                                      } else {
+                                        console.error('Failed to assign', data.error)
+                                        alert(data.error || 'Erro ao atribuir')
+                                      }
+                                    } catch (e:any) {
+                                      console.error(e)
+                                      alert('Erro ao atribuir')
+                                    }
+                                  }}
+                                  className="inline-flex items-center px-3 py-1.5 bg-green-600 text-white text-sm rounded-md hover:bg-green-700"
+                                >
+                                  {language === 'pt' ? 'Angariar' : 'Claim'}
+                                </button>
+                              </div>
+                            ) : null}
+                            {(p.responsavel_tecnico && currentUser && ['franqueador','admin'].includes(String(currentUser.role||'').toLowerCase()) &&
+                              (p.responsavel_tecnico === (currentUser.full_name || currentUser.email))) ? (
+                              <div className="mt-2">
+                                <button
+                                  onClick={async () => {
+                                    try {
+                                      const res = await fetch(`/api/projetos/${p.id}/desistir`, { method: 'POST' })
+                                      const data = await res.json()
+                                      if (data.ok) {
+                                        setProjetos(prev => prev.map(pr => pr.id === p.id ? { ...pr, responsavel_tecnico: null, status: (pr.status === 'respondido' ? 'pendente' : pr.status) } : pr))
+                                      } else {
+                                        alert(data.error || 'Erro ao desistir')
+                                      }
+                                    } catch (e:any) {
+                                      alert('Erro ao desistir')
+                                    }
+                                  }}
+                                  className="inline-flex items-center px-3 py-1.5 bg-red-600 text-white text-sm rounded-md hover:bg-red-700"
+                                >
+                                  {language === 'pt' ? 'Desistir' : 'Unclaim'}
+                                </button>
+                              </div>
+                            ) : null}
+                            {currentUser && String(currentUser?.role || '').toLowerCase() === 'cliente' ? (
+                              <div className="mt-3">
+                                <button
+                                  onClick={() => {
+                                    try { sessionStorage.setItem('afix_edit_projeto', JSON.stringify(p)) } catch (e) {}
+                                    try { const { setEditingProjeto } = require('@/lib/editCache'); setEditingProjeto(p) } catch (e) {}
+                                    router.push(`/projetos/${p.id}/edit`)
+                                  }}
+                                  className="inline-flex items-center px-3 py-1.5 bg-blue-600 text-white text-sm rounded-md hover:bg-blue-700"
+                                >
+                                  {language === 'pt' ? 'Editar' : 'Edit'}
+                                </button>
+                              </div>
+                            ) : null}
+                          </>
+                        )
+                      })()}
                     </div>
                   ))}
                 </div>
               )
-            ) : (
+            }
+            return (
               <div className="space-y-4">
                 {[
                   { name: 'Maria Santos', service: 'Remodelação', location: 'Lisboa', status: 'pendente' },
@@ -714,37 +1056,8 @@ export default function Home() {
                   </div>
                 ))}
               </div>
-            )}
-          </div>
-
-          <div className="bg-white rounded-xl shadow-lg p-6">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">
-              {language === 'pt' ? 'Serviços Mais Solicitados' : 'Most Requested Services'}
-            </h3>
-            <div className="space-y-4">
-              {[
-                { service: 'Remodelação', count: 45, percentage: 35 },
-                { service: 'Pintura', count: 32, percentage: 25 },
-                { service: 'Canalização', count: 28, percentage: 22 },
-                { service: 'Construção Civil', count: 23, percentage: 18 }
-              ].map((item, index) => (
-                <div key={index} className="flex items-center justify-between">
-                  <div className="flex-1">
-                    <div className="flex justify-between mb-1">
-                      <span className="text-sm font-medium text-gray-900">{item.service}</span>
-                      <span className="text-sm text-gray-600">{item.count}</span>
-                    </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2">
-                      <div 
-                        className="bg-blue-600 h-2 rounded-full" 
-                        style={{ width: `${item.percentage}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
+            )
+          })()}
         </div>
       </div>
     </div>
@@ -859,30 +1172,38 @@ export default function Home() {
   );
 
   const renderContent = () => {
+      // Avoid flashing Home before we know if the user is logged in
+      if (!authLoaded) {
+        return <div className="py-16 text-center text-sm text-gray-500">{language === 'pt' ? 'A carregar...' : 'Loading...'}</div>
+      }
       // If the activeTab explicitly requests the franchise view, honor it regardless
       // of authentication state (so clicking the "Franquia" menu opens the Home tab).
   if (activeTab === 'franchise') return <FranchisePage />
   if (activeTab === 'chat') return <ChatPage />
 
-      // If user is authenticated, show the banca (project details) for clients,
-      // otherwise show the admin Dashboard.
-      if (currentUser) {
-        const role = String(currentUser.role || '').toLowerCase()
-        if (['cliente', 'franqueado', 'franqueador'].includes(role)) return <BancaPage />
-        return <DashboardPage />
-      }
-    switch (activeTab) {
-      case 'home':
-        return <HomePage />;
-      case 'quote':
-        return <QuotePage />;
-      
-      case 'dashboard':
-        return <DashboardPage />;
-      
-      default:
-        return <HomePage />;
-    }
+  // If the active tab explicitly requests the dashboard, only show it to admins.
+  // Otherwise, if the user is a client/franchisee/franchisor and is on the Home tab,
+  // show their projects (the Dashboard view) automatically — this restores the
+  // previous behaviour where clients saw their projects after login.
+  if (activeTab === 'dashboard') {
+    // Show Projects page for any role when the dashboard/projects tab is requested
+    return <ProjectsPage />;
+  }
+
+  // Auto-show projects for authenticated client-like roles when on Home
+  const _role = String(currentUser?.role || '').toLowerCase();
+  if (currentUser && ['cliente', 'franqueado', 'franqueador'].includes(_role) && activeTab === 'home') {
+    return <ProjectsPage />
+  }
+
+  switch (activeTab) {
+    case 'home':
+      return <HomePage />;
+    case 'quote':
+      return <QuotePage />;
+    default:
+      return <HomePage />;
+  }
   };
 
   return (
@@ -890,4 +1211,12 @@ export default function Home() {
       {renderContent()}
     </div>
   );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<div />}> 
+      <HomeContent />
+    </Suspense>
+  )
 }
